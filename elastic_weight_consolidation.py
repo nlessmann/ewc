@@ -9,9 +9,11 @@ class ElasticWeightConsolidation:
 
     def __init__(self, model, crit, lr=0.001, weight=1000000):
         self.model = model.to('cuda')
+        self.model.train(False)
+
         self.weight = weight
         self.crit = crit
-        self.optimizer = optim.Adam(self.model.parameters(), lr)
+        self.optimizer = optim.SGD(self.model.parameters(), lr)
 
     def _update_mean_params(self):
         for param_name, param in self.model.named_parameters():
@@ -22,7 +24,7 @@ class ElasticWeightConsolidation:
         dl = DataLoader(current_ds, batch_size, shuffle=True)
         log_liklihoods = []
         for i, (input, target) in enumerate(dl):
-            if i > num_batch:
+            if i >= num_batch:
                 break
             output = F.log_softmax(self.model(input.to('cuda')), dim=1)
             log_liklihoods.append(output[:, target.to('cuda')])
@@ -43,17 +45,28 @@ class ElasticWeightConsolidation:
                 _buff_param_name = param_name.replace('.', '__')
                 estimated_mean = getattr(self.model, '{}_estimated_mean'.format(_buff_param_name))
                 estimated_fisher = getattr(self.model, '{}_estimated_fisher'.format(_buff_param_name))
+
+                if False and param_name.startswith('lin3'):
+                    mask = torch.tensor([1] * 10 + [0] * 10, dtype=torch.float32, device='cuda')
+                    if 'bias' in param_name:
+                        estimated_fisher *= mask
+                    else:
+                        estimated_fisher *= mask[:, None]
+
                 losses.append((estimated_fisher * (param - estimated_mean) ** 2).sum())
+
             return (weight / 2) * sum(losses)
         except AttributeError:
             return 0
 
     def forward_backward_update(self, input, target):
+        self.model.train(True)
         output = self.model(input.to('cuda'))
-        loss = self._compute_consolidation_loss(self.weight) + self.crit(output, target.to('cuda'))
         self.optimizer.zero_grad()
+        loss = self._compute_consolidation_loss(self.weight) + self.crit(output, target.to('cuda'))
         loss.backward()
         self.optimizer.step()
+        self.model.train(False)
 
     def save(self, filename):
         torch.save(self.model, filename)
