@@ -1,16 +1,14 @@
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 from torch import autograd
-import numpy as np
 from torch.utils.data import DataLoader
 
 
 class ElasticWeightConsolidation:
 
     def __init__(self, model, crit, lr=0.001, weight=1000000):
-        self.model = model
+        self.model = model.to('cuda')
         self.weight = weight
         self.crit = crit
         self.optimizer = optim.Adam(self.model.parameters(), lr)
@@ -26,12 +24,12 @@ class ElasticWeightConsolidation:
         for i, (input, target) in enumerate(dl):
             if i > num_batch:
                 break
-            output = F.log_softmax(self.model(input), dim=1)
-            log_liklihoods.append(output[:, target])
+            output = F.log_softmax(self.model(input.to('cuda')), dim=1)
+            log_liklihoods.append(output[:, target.to('cuda')])
         log_likelihood = torch.cat(log_liklihoods).mean()
-        grad_log_liklihood = autograd.grad(log_likelihood, self.model.parameters())
+        grad_log_likelihood = autograd.grad(log_likelihood, self.model.parameters())
         _buff_param_names = [param[0].replace('.', '__') for param in self.model.named_parameters()]
-        for _buff_param_name, param in zip(_buff_param_names, grad_log_liklihood):
+        for _buff_param_name, param in zip(_buff_param_names, grad_log_likelihood):
             self.model.register_buffer(_buff_param_name+'_estimated_fisher', param.data.clone() ** 2)
 
     def register_ewc_params(self, dataset, batch_size, num_batches):
@@ -51,8 +49,8 @@ class ElasticWeightConsolidation:
             return 0
 
     def forward_backward_update(self, input, target):
-        output = self.model(input)
-        loss = self._compute_consolidation_loss(self.weight) + self.crit(output, target)
+        output = self.model(input.to('cuda'))
+        loss = self._compute_consolidation_loss(self.weight) + self.crit(output, target.to('cuda'))
         self.optimizer.zero_grad()
         loss.backward()
         self.optimizer.step()
